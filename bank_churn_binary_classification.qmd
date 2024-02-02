@@ -507,21 +507,18 @@ head(train_data_preproc)
 ```
 
 ## Data Splitting
-The data is split into three parts:
-- A training set
-- A testing set
-- A validation set
+
+The data is split into three parts: - A training set - A testing set - A validation set
 
 ```{r}
 #| label: data-splitting
 
 set.seed(234)
 
-train_data_split <- initial_validation_split(train_data_preproc, prop = c(.6, .2), strata = exited)
+train_data_split <- initial_split(train_data_preproc, prop = c(.8), strata = exited)
 
 training_data <- training(train_data_split)
-validation_data <- validation(train_data_split)
-testing_data <- testing(train_data_split)
+validation_data <- testing(train_data_split)
 ```
 
 ## Model Development
@@ -553,7 +550,9 @@ rf_model <-
 ```
 
 ### Feature Engineering
+
 Some feature engineering will be carried out for the different models, based on their specifications
+
 ```{r}
 #| label: feature-engineering
 log_reg_rec <-
@@ -577,8 +576,8 @@ rf_rec <-
   step_zv()
 ```
 
-
 Recipe object and model specification will be added to each model workflow
+
 ```{r}
 #| label: model workflow
 
@@ -600,7 +599,6 @@ decision_tree_wf <-
 
 ```
 
-
 ## Logistic_regression
 
 ```{r}
@@ -613,17 +611,45 @@ log_reg_fit <-
 
 ```
 
-Logistic regression is having an accuracy of 83% and an area under the curve of 0.82%
+Next, we test the fit on the validation set.
 
 ```{r}
-conf_mat(log_reg_assess, truth = exited, estimate = .pred_class)
+log_reg_validation_pred <- predict(log_reg_fit, validation_data, type = "class") |> 
+  bind_cols(validation_data) |> 
+  relocate(.pred_class, .after = exited)
 ```
 
-The model predicts non-event well than event
 
-### Parameter tuning for decision tree and random forest
+```{r}
+conf_mat(log_reg_validation_pred, truth = exited, estimate = .pred_class)
+```
+There are more false positive than false negative. The model predicts non-event better than event, but the accuracy is 83%
+```{r}
+#| label: tbl-log-reg-accuracy
+#| tbl-cap: Logistic regression accuracy
+accuracy(log_reg_validation_pred, truth = exited, estimate = .pred_class)
+```
 
-First we set a grid
+
+```{r}
+#| label: fig-roc-auc-log-reg
+#| fig-cap: Area under the curve of Logistic regression
+log_reg_validation_pred |> 
+  mutate(.pred_class = as.numeric(.pred_class)) |> 
+  roc_curve(exited, .pred_class) |> 
+  autoplot() +
+  labs(
+    title = str_wrap(
+      "Logistic regression shows low predictive capacity for churned class",
+      width  = 35)
+  ) + 
+  theme_pander()
+```
+Area under the curve, @fig-roc-auc-log-reg shows the predictive capability for churning is below 50%, while accuracy is high @tbl-log-reg-accuracy, this can be the ability to predict retention, which is not our interest.
+ We will check the other models to see which will give our desired result
+
+## Decision Trees
+For the decision tree, we will set a grid, not to complex, and this is due to computational resources. After that we will tune or model, collect their metrics and evaluate their performance. Parallel computing will be employed to reduce training time time.
 
 ```{r}
 #| label: decision-tree-grid
@@ -633,24 +659,31 @@ tree_grid <-
   grid_regular(
     cost_complexity(),
     tree_depth(),
-    levels = 15
+    levels = 5
   )
+
+glimpse(tree_grid)
 ```
 
 ```{r}
 #| label: decision-tune-tuning
-
 set.seed(234)
 doParallel::registerDoParallel()
+
+training_data_folds <- vfold_cv(training_data, v = 5, strata = exited)
 
 dt_tune <-
   tune_grid(
     decision_tree_wf,
-    resamples = train_folds,
-    grid = tree_grid
+    grid = tree_grid,
+    resamples = training_data_folds
   )
+```
+
+```{r}
 
 ```
+
 
 ```{r}
 #| label: random-forest-tuning
@@ -661,7 +694,7 @@ doParallel::registerDoParallel()
 rf_tune <-
   tune_grid(
     rand_forest_wf,
-    resamples = train_folds
+    resamples = training_data_folds
   )
 
 ```
