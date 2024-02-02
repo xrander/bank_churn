@@ -486,13 +486,7 @@ Three models were used for predicting members that churned. They are:
 
 -   random forest
 
-The metrics for evaluation will include:
-
--   sensitivity
-
--   accuracy, and
-
--   roc
+The metrics for evaluation will only be the roc_auc
 
 ## Data Pre-processing for Modelling
 
@@ -641,15 +635,21 @@ log_reg_validation_pred |>
   labs(
     title = str_wrap(
       "Logistic regression shows low predictive capacity for churned class",
-      width  = 35)
+      width  = 70)
   ) + 
   theme_pander()
 ```
-Area under the curve, @fig-roc-auc-log-reg shows the predictive capability for churning is below 50%, while accuracy is high @tbl-log-reg-accuracy, this can be the ability to predict retention, which is not our interest.
- We will check the other models to see which will give our desired result
+
+Area under the curve, @fig-roc-auc-log-reg shows the predictive capability for churning is below 50%, while accuracy is high @tbl-log-reg-accuracy, this can be the ability to predict retention, which is not our interest. We will check the other models to see which will give our desired result
+
+```{r}
+#| label: cross-fold validation
+training_data_folds <- vfold_cv(training_data, v = 5, strata = exited)
+```
+
 
 ## Decision Trees
-For the decision tree, we will set a grid, not to complex, and this is due to computational resources. After that we will tune or model, collect their metrics and evaluate their performance. Parallel computing will be employed to reduce training time time.
+For the decision tree, we will set a grid a not too complex, and this is due to computational resources. After that we will tune or model, collect their metrics and evaluate their performance. Parallel computing will be employed to reduce training time time.
 
 ```{r}
 #| label: decision-tree-grid
@@ -662,16 +662,14 @@ tree_grid <-
     levels = 5
   )
 
-glimpse(tree_grid)
+tree_grid |> 
+  count(tree_depth)
 ```
 
 ```{r}
 #| label: decision-tune-tuning
 set.seed(234)
-doParallel::registerDoParallel()
-
-training_data_folds <- vfold_cv(training_data, v = 5, strata = exited)
-
+doParallel::registerDoParallel(cores = 5)
 dt_tune <-
   tune_grid(
     decision_tree_wf,
@@ -681,30 +679,133 @@ dt_tune <-
 ```
 
 ```{r}
+dt_tune |> 
+  collect_metrics() |> 
+  head(n = 10)
+```
+Visualizing the result will be better than the normal print
+```{r}
+#| label: fig-tree-grid-viz
+#| fig: Grid search tune results for random forest
 
+dt_tune |> 
+  collect_metrics() |> 
+  filter(.metric == "roc_auc") |> 
+  mutate(tree_depth = factor(tree_depth)) |> 
+  ggplot(aes(cost_complexity, mean, color = tree_depth)) +
+  geom_line(linewidth = 1, alpha = 0.4) +
+  labs( 
+    x = "Cost Complexity",
+    y = "Mean",
+    col = "Tree depth",
+    title = "Model improves as tree depth increases",
+    subtitle = str_wrap("Tree depth 15 performed well, but 11 is the best", width = 50)
+  ) +
+  geom_point(size = 2) +
+  scale_x_log10(labels = label_number()) +
+  scale_color_colorblind() +
+  theme_clean() +
+  theme(legend.position = "bottom")
+  
+```
+
+Our short tree with depth of 1 performed bad across all values of `cost_complexity`. The model improves as tree depth increases, but the best depth is 11 and not the maximum tree depth of 15 @fig-tree-grid-viz. The top 5 candidates models are show below.
+
+```{r}
+dt_tune |> 
+  show_best("roc_auc")
+```
+
+We will select the best of the hyperparameter values and use it to finalize our model
+
+```{r}
+best_tree <- dt_tune |> 
+  select_best("roc_auc")
+
+best_tree
+```
+
+Before we proceed with finalizing, we will fit a random forest tree and see how it performs compare it to the decision tree model, then finalize on which is the best.
+
+## Random Forest
+The right values to use, when training a single model is unknown, but we can train a group and see which turns out best. Our training data is large, more than 132926 rows and 11 columns, a sample of this data should be collected, and be used to train the random forest model. Parallelization will also be used here to speed up to processing time. 
+```{r}
+#| label: random-forest-resamples
+set.seed (222)
+rand_for_resamples <- initial_split(training_data, prop = 0.1, strata = exited)
+
+rand_for_resamples <- training(rand_for_resamples)
+
+rand_for_resamples <- vfold_cv(rand_for_resamples, v = 10)
 ```
 
 
 ```{r}
 #| label: random-forest-tuning
-
 set.seed(456)
-doParallel::registerDoParallel()
+doParallel::registerDoParallel(cores = 5)
 
 rf_tune <-
   tune_grid(
     rand_forest_wf,
-    resamples = training_data_folds
+    resamples = rand_for_resamples,
+    grid = 20
+  )
+```
+Let's see the result
+```{r}
+rf_tune |> 
+  collect_metrics() |> 
+  filter(.metric == "roc_auc") |> 
+  select(mtry, min_n, mean) |> 
+  pivot_longer(
+    mtry:min_n,
+    values_to = "value",
+    names_to = "parameter"
+  ) |> 
+  ggplot(aes(value, mean, col = parameter)) +
+  geom_point()
+```
+
+From the plot above, it seems low mtry (from 3 to 5) are good and high min_n (25 to 35) are good. We should a set range between this values using grid_regular for tuning one more time.
+```{r}
+rf_grid <- 
+  grid_regular(
+    min_n(range = c(25, 35)),
+    mtry(range = c(3, 6)),
+    levels = 5
   )
 
+rf_grid
 ```
+
+```{r}
+set.seed(347)
+
+rand_forest_tune_reg <-
+  tune_grid(
+    rand_forest_wf,
+    resamples = rand_for_resamples,
+    grid = rf_grid
+  )
+```
+
+```{r}
+rand_forest_tune_reg |> 
+  collect_metrics() |> 
+  filter(.metric == "roc_auc") |> 
+  mutate(mtry = factor(mtry)) |> 
+  ggplot(aes(min_n, mean, col = mtry)) +
+  geom_point() +
+  geom_line() +
+  labs(y = "AUC")
+```
+
+### Finalize Decison
 
 ### Show metrics for estimates
 
 ```{r}
-dt_tune |> 
-  collect_metrics()
-
 rf_tune |> 
   collect_metrics()
 ```
