@@ -1,0 +1,693 @@
+---
+title: "Bank Churn Binary Classification"
+author: "Olamide Adu"
+format: html
+---
+
+# Introduction
+
+This is a beginner-friendly note to predict bank churning. Bank churning refers to the practice of repeated opening and closing of bank accounts typically to take advantage of financial incentives like sign-up bonuses, promotional offers and so on, or any other motives for opening and closing multiple accounts.
+
+## Aim of Project
+
+The aim of this project is to predict the bank customers that will churn. Three models will be trained to predict customer churning. The models are:
+
+-   logistic regression,
+
+-   decision trees and,
+
+-   random forest
+
+### Load Libraries
+
+```{r}
+#| label: load-libraries
+#| warning: false
+#| message: false
+#| results: hide
+
+library(tidyverse)
+library(ggthemes) 
+library(tidymodels)
+library(janitor)
+library(GGally)
+library(patchwork)
+library(wordcloud2)
+library(webshot2)
+library(gt)
+library(scales)
+library(ggridges)
+```
+
+## Data Definition
+
+The bank customer churn dataset is a commonly used dataset for predicting customer churn in the banking industry. It contains information on bank customers who either left the bank or continue to be a customer. The dataset includes the following attributes:
+
+1.  **Customer ID**: A unique identifier for each customer
+
+2.  **Surname**: The customer's surname or last name
+
+3.  **Credit Score**: A numerical value representing the customer's credit score
+
+4.  **Geography**: The country where the customer resides (France, Spain or Germany)
+
+5.  **Gender**: The customer's gender (Male or Female)
+
+6.  **Age**: The customer's age.
+
+7.  **Tenure**: The number of years the customer has been with the bank
+
+8.  **Balance**: The customer's account balance
+
+9.  **NumOfProducts**: The number of bank products the customer uses (e.g., savings account, credit card)
+
+10. **HasCrCard**: Whether the customer has a credit card (1 = yes, 0 = no)
+
+11. **IsActiveMember**: Whether the customer is an active member (1 = yes, 0 = no)
+
+12. **EstimatedSalary**: The estimated salary of the customer
+
+13. **Exited**: Whether the customer has churned (1 = yes, 0 = no).
+
+### Import the data
+
+```{r}
+#| label: pkg-import-data
+#| message: false
+
+train_data <- read_csv("data/train.csv") |> 
+  clean_names() |> 
+  mutate(exited = factor(exited))
+
+test_data <- read_csv("data/test.csv") |> 
+  clean_names()
+
+dim(train_data)
+dim(test_data)
+```
+
+The `train_data` is having 165034 rows and 14 columns while the `test_data` is having 110023 rows and 13 columns
+
+```{r}
+#| label: tbl-data-frame-comparison
+#| tbl-cap: |
+#|  Comparison between the variable types between the train and test data
+
+compare_df_cols(train_data, test_data) |> 
+  gt()
+```
+
+@tbl-data-frame-comparison shows only the target variable missing in the test data
+
+# Exploratory Data Analysis
+
+### Target Variable
+
+```{r}
+#| label: fig-churned-and-retained-members
+#| layout-ncol: 2
+#| fig-cap: Frequency of churned and retained account
+#| fig-subcap:
+#|  - "churned and retained members"
+#|  - "churned and retained members according to countries"
+
+
+train_data |> 
+  mutate(exited = factor(exited, levels = c(0, 1), labels = c("No", "Yes"))) |> 
+  ggplot(aes(exited)) +
+  geom_bar(fill = c("brown", "orange")) +
+  theme_pander() +
+  labs(
+    x = "Churned",
+    y = "Count",
+    title = "Retained account is more than churned account",
+  ) +
+  scale_y_continuous(labels = label_comma())
+
+train_data |> 
+  mutate(exited = factor(exited, levels = c(0, 1), labels = c("No", "Yes"))) |> 
+  ggplot(aes(exited, fill = geography)) +
+  geom_bar(position = "dodge") +
+  theme_pander() +
+  labs(
+    x = "Churned",
+    y = "Count",
+    fill = "Geography",
+    title = "France banks have more members that other banks",
+    subtitle = "Germany would have higher churn-rate than other countries"
+  )
+```
+
+@fig-churned-and-retained-members-1 reveals there are more retained accounts than churned accounts, while France is having more churned account than the other region, Germany seems to be close, and have less population than France, @fig-churned-and-retained-members-2.
+
+```{r}
+#| label: fig-proportion-of-exited-customer
+#| layout-ncol: 2
+#| fig-cap: Proportion of Churned Customer
+#| fig-subcap:
+#|     - "credit card"
+#|     - "active member" 
+#| fig-alt: |
+#|  - Bar plot of customers bank account, a: total proportion of churned customers
+#|  orange bar represents members that have churned, and black represents members that
+#|  have not churned, b: Proportion of churned customers according to
+#|  how active they are in  using the bank and its services.
+
+train_data |> 
+  mutate(
+    exited = factor(exited, levels = c(0, 1), labels = c("No", "Yes")),
+    has_cr_card = factor(has_cr_card, levels = c(0, 1), labels = c("No", "Yes"))
+    ) |> 
+  ggplot(aes(exited, after_stat(prop), group = has_cr_card, fill = has_cr_card)) +
+  geom_bar(position = "dodge") +
+  scale_fill_tableau() +
+  labs(
+    x = "Churned", y = "Proportion", 
+    fill = "Has credit card",
+    title = "Owning a credit card doesn't influence churning"
+  ) +
+  scale_y_continuous(labels = label_percent()) +
+  theme_clean()
+  
+train_data |> 
+  mutate(
+    exited = factor(exited, levels = c(0, 1), labels = c("No", "Yes")),
+    is_active_member = factor(is_active_member, levels = c(0, 1), labels = c("No", "Yes"))
+    ) |>
+  ggplot(
+    aes(exited, after_stat(prop), 
+        group = is_active_member, 
+        fill = is_active_member)
+  ) +
+  geom_bar(position = "dodge") +
+  scale_fill_tableau() +
+  labs(
+    x = "Churned", y = "Proportion", 
+    fill = "Active member",
+    title = "Inactive members churn more than active members"
+  ) +
+  scale_y_continuous(labels = label_percent()) +
+  theme_clean()
+```
+
+@fig-proportion-of-exited-customer-1 shows about 20% percent of the customers churning either if they have credit card or not, and @fig-proportion-of-exited-customer-2 shows a clear members that are not active members churning more than active members.
+
+```{r}
+#| label: fig-exited-est-sal-credit-score
+#| fig-cap: Scatter plot of estimated salary and credit score of members across the three countries.
+
+train_data |> 
+  ggplot(aes(estimated_salary, credit_score, color = factor(exited))) +
+  geom_point() + 
+  scale_color_tableau(labels = c("No", "Yes")) +
+  facet_wrap(~geography) +
+  labs(
+    x = "Estimated Salary",
+    y = "Credit Score",
+    fill = "Churned",
+    title = "Chruning is not affected by credit score and estimated salary",
+    subtitle = "Germany has high churn compared to France and Spain"
+  ) +
+  scale_x_continuous(labels = label_currency(prefix = "€")) +
+  theme_pander() +
+  theme(axis.text.x = element_text(angle = 45))
+```
+
+@fig-exited-est-sal-credit-score shows German members churn at all ranges of estimated salary and credit score.
+
+### Feature Variable
+
+#### Categorical Variables
+
+```{r}
+#| label: fig-customer-word-cloud
+#| fig-cap: Word cloud of customers according to the number of churned accounts they own
+
+customer_name <- train_data |> 
+  filter(exited == 1) |> 
+  group_by(surname) |> 
+  count() |> 
+  ungroup() |> 
+  rename(freq = n) |> 
+  arrange(desc(freq))
+
+wordcloud2(customer_name, size =1.6, color = "random-light", backgroundColor = "black")
+```
+
+@fig-customer-word-cloud shows customers having churned account. The account under the name Hsia have churned the most.
+
+```{r}
+#| label: fig-gender-distribution
+#| fig-cap: |
+#|  Distribution of gender shows that there are more male members than female members
+#| fig-subcap: 
+#|  - "General member  population according to sex"
+#|  - "Member population according to country"
+
+train_data |> 
+  ggplot(aes(gender, fill = gender)) +
+  geom_bar(show.legend = F) +
+  labs(x = "gender", y = "Count", title = "Male members are more than females") +
+  scale_fill_calc() +
+  theme_pander()
+
+train_data |> 
+  ggplot(aes(gender, fill = geography)) +
+  geom_bar(position = "dodge") +
+  labs(
+    x = "Age",
+    y = "Count",
+    fill = "Geography",
+    title = "Age distribution across countries"
+  ) +
+  scale_fill_calc() +
+  theme_pander()
+
+```
+
+@fig-gender-distribution shows there are more male customer than female customers
+
+```{r}
+#| label: fig-active-member
+#| layout-ncol: 2
+#| fig-cap: Members activity status
+#| fig-subcap: 
+#|   - "Members status if active or not"
+#|   - "Members status according to their gender"
+
+train_data |> 
+  mutate(is_active_member = factor(
+    is_active_member,
+    levels = c(0, 1),
+    labels = c("No", "Yes"))
+  ) |> 
+  ggplot(aes(is_active_member, fill = is_active_member)) +
+  geom_bar(show.legend = F) +
+  labs(
+    x = "Active member",
+    y = "Count",
+    title = "No difference in the count of active and inactive members"
+  ) +
+  scale_fill_tableau() +
+  theme_pander()
+
+train_data |> 
+  mutate(is_active_member = factor(
+    is_active_member,
+    levels = c(0, 1),
+    labels = c("No", "Yes"))
+  ) |> 
+  ggplot(aes(is_active_member, fill = gender)) +
+  geom_bar(position = "dodge") +
+  labs(
+    title = "Active members according to sex",
+    fill = "Gender",
+    x = "Active member", y = "count"
+  ) +
+  scale_fill_colorblind() +
+  theme_pander()
+```
+
+@fig-active-member shows no difference in the number of members activity, even when differentiated by their gender @fig-active-member-2.
+
+```{r}
+#| label: fig-has-credit-card-plot
+#| fig-cap: Members with Credit Cards
+
+train_data |> 
+  mutate(has_cr_card = factor(has_cr_card, levels = c(0, 1), labels = c("No", "Yes"))) |> 
+  ggplot(aes(has_cr_card, fill = has_cr_card)) +
+  geom_bar(show.legend = F) +
+  labs(x = "Has Credit Card", y = "Count") +
+  scale_fill_tableau() +
+  theme_pander()
+```
+
+#### Numeric Variables
+
+```{r}
+#| label: fig-age-distribution
+#| fig-width: 7
+#| fig-cap: Age distribution of customers
+#| fig-subcap: 
+#|  - "General age distribution"
+#|  - "Age distribution according to sex"
+
+age_distribution <- train_data |> 
+  ggplot(aes(age)) +
+  geom_histogram(binwidth = 5, fill = "tomato3") +
+  geom_density(stat = "bin", binwidth = 5, col = "black") +
+  expand_limits(x = c(0, 100)) +
+  labs(
+    x = "Age",
+    title = "General age distribution",
+    y = "Count"
+  ) +
+  theme_pander() +
+  theme(plot.title = element_text(size = 12),
+        plot.subtitle = element_text(size = 8))
+
+age_distribution_sex <- train_data |> 
+  ggplot(aes(age, col = gender)) +
+  geom_freqpoly(binwidth = 15) +
+  labs(
+    x = "Age",
+    y = "",
+    col = "Gender",
+    title = "Members 30 to 40 are higher for both sex",
+    subtitle = "Males are more than Females across all ages"
+  ) +
+  scale_color_calc() +
+  theme_pander() +
+  theme(plot.title = element_text(size = 12),
+        plot.subtitle = element_text(size = 8))
+
+age_distribution + age_distribution_sex
+```
+
+The highest number of account owners are between age 30 to 40 as show in @fig-age-distribution-1, with male members being more than female members across all ages @fig-age-distribution-2 .
+
+```{r}
+#| label: fig-credit-score-density
+#| layout-ncol: 2
+#| fig-cap: Credit score across regions
+#| fig-subcap: 
+#|   - "a: Credit score distribution"
+#|   - "b: Credit score according to geography"
+#| warning: false
+#| message: false
+
+train_data |> 
+  ggplot(aes(credit_score)) +
+  geom_histogram(binwidth = 50, alpha = 0.7, fill = "tomato3") +
+  geom_density(stat = "bin", col = "black", binwidth = 50) +
+  labs(
+    x = "Credit Score",
+    y = "Density", 
+    title = "General credit score distribution"
+  ) +
+  theme_pander()
+
+train_data |> 
+  ggplot(aes(credit_score, geography, fill = geography)) +
+  geom_density_ridges(alpha = 0.5, show.legend = F) +
+  labs(x = "Credit Score", y = "Geography") +
+  scale_fill_calc() +
+  labs(
+    title = "Regional credit score distribution",
+    subtitle = "No difference in credit score distribution across regions"
+  ) +
+  theme_pander()
+```
+
+@fig-credit-score-density-2 shows no differences in the credit score across regions and in general @fig-credit-score-density-1
+
+```{r}
+#| label: fig-tenure-members
+#| fig-cap: Members tenure
+train_data |> 
+  mutate(tenure = factor(tenure)) |> 
+  ggplot(aes(fct_infreq(tenure), fill = tenure)) +
+  geom_bar(show.legend = F) +
+  labs(x = "Tenure", y = "count", title = "Count of members according to tenure") +
+  scale_fill_calc() +
+  theme_pander()
+```
+
+There's a good distribution of old and new members @fig-tenure-members
+
+```{r}
+#| label: fig-est-salary
+#| layout-ncol: 3
+#| fig-cap: Estimated salary distribution
+#| fig-subcap: 
+#|   - "General estimated salary distribution"
+#|   - "Estimated salary distribution according to gender"
+#|   - "Estimated salary distribution according to region"
+
+train_data |> 
+  ggplot(aes(estimated_salary)) +
+  geom_histogram(binwidth = 10000, fill = "tomato3", alpha = 0.5) +
+  geom_density(stat = "bin", binwidth = 10000, col = "black") +
+  labs(
+    x = "Estimated salary",
+    y = " Count",
+    title = "Multimodal estimated salary distribution"
+  ) +
+  theme_pander()
+
+train_data |> 
+  ggplot(aes(estimated_salary, gender, fill = gender)) +
+  geom_density_ridges(alpha = 0.4) +
+  labs(
+    x = "Estimated salary",
+    y = "Density",
+    fill = "Gender",
+    title = "Estimated salary distribution of the genders"
+  ) +
+  scale_x_continuous(labels = label_currency(prefix = "€")) +
+  theme_pander() +
+  theme(legend.position = "none")
+
+train_data |> 
+  ggplot(aes(estimated_salary, geography, fill = geography)) +
+  geom_density_ridges(alpha = 0.4) +
+  labs(
+    x = "Estimated salary",
+    y = "Density",
+    fill = "Geography",
+    title = "Estimated salary distribution of according to regions"
+  ) +
+  scale_x_continuous(labels = label_currency(prefix = "€")) +
+  theme_pander() +
+  theme(legend.position = "none")
+```
+
+@fig-est-salary showing multimodal distribution of estimated salary.
+
+#### Correlation Plot
+
+```{r}
+#| label: correlation-plot
+#| message: false
+#| warning: false
+#| fig-cap: Correlation plot
+
+ggcorr(train_data)
+```
+
+# Model Workflow
+
+Three models were used for predicting members that churned. They are:
+
+-   logistic model
+
+-   decision trees
+
+-   random forest
+
+The metrics for evaluation will include:
+
+-   sensitivity
+
+-   accuracy, and
+
+-   roc
+
+## Data Pre-processing for Modelling
+
+```{r}
+#| label: data preparation
+
+train_data_preproc <- train_data |> 
+  select(!c(id, customer_id, surname)) |> 
+  mutate_if(is_character, factor)
+
+head(train_data_preproc)
+```
+
+## Data Splitting
+The data is split into three parts:
+- A training set
+- A testing set
+- A validation set
+
+```{r}
+#| label: data-splitting
+
+set.seed(234)
+
+train_data_split <- initial_validation_split(train_data_preproc, prop = c(.6, .2), strata = exited)
+
+training_data <- training(train_data_split)
+validation_data <- validation(train_data_split)
+testing_data <- testing(train_data_split)
+```
+
+## Model Development
+
+The engine to be used for the pre-selected algorithms, will be shown below.
+
+```{r}
+#| label: algorithms-to-be-used
+log_reg_model  <- 
+  logistic_reg() |> 
+  set_engine("glm")
+
+decision_tree_model <-
+  decision_tree(
+    tree_depth = tune(),
+    cost_complexity = tune()
+  ) |> 
+  set_engine("rpart") |> 
+  set_mode("classification")
+
+rf_model <- 
+  rand_forest(
+    trees = 1000,
+    mtry = tune(),
+    min_n = tune()
+  ) |> 
+  set_engine("ranger") |> 
+  set_mode("classification")
+```
+
+### Feature Engineering
+Some feature engineering will be carried out for the different models, based on their specifications
+```{r}
+#| label: feature-engineering
+log_reg_rec <-
+  recipe(
+    exited ~ ., 
+    data = training_data
+  )  |> 
+  step_dummy(geography) |>
+  step_zv()
+
+decision_tree_rec <- 
+  recipe(exited ~ .,
+         data = training_data) |> 
+  step_nzv()
+
+rf_rec <-
+  recipe(
+    exited ~ .,
+  data = training_data
+  ) |> 
+  step_zv()
+```
+
+
+Recipe object and model specification will be added to each model workflow
+```{r}
+#| label: model workflow
+
+log_reg_wf <-
+  workflow() |> 
+  add_model(log_reg_model) |> 
+  add_recipe(log_reg_rec)
+  
+
+rand_forest_wf <-
+  workflow() |> 
+  add_recipe(rf_rec) |> 
+  add_model(rf_model)
+
+decision_tree_wf <-
+  workflow() |> 
+  add_recipe(decision_tree_rec) |> 
+  add_model(decision_tree_model)
+
+```
+
+
+## Logistic_regression
+
+```{r}
+#| label: fit-models
+#| message: false
+
+log_reg_fit <- 
+  log_reg_wf |>  
+  fit(training_data)
+
+```
+
+Logistic regression is having an accuracy of 83% and an area under the curve of 0.82%
+
+```{r}
+conf_mat(log_reg_assess, truth = exited, estimate = .pred_class)
+```
+
+The model predicts non-event well than event
+
+### Parameter tuning for decision tree and random forest
+
+First we set a grid
+
+```{r}
+#| label: decision-tree-grid
+set.seed(345)
+
+tree_grid <- 
+  grid_regular(
+    cost_complexity(),
+    tree_depth(),
+    levels = 15
+  )
+```
+
+```{r}
+#| label: decision-tune-tuning
+
+set.seed(234)
+doParallel::registerDoParallel()
+
+dt_tune <-
+  tune_grid(
+    decision_tree_wf,
+    resamples = train_folds,
+    grid = tree_grid
+  )
+
+```
+
+```{r}
+#| label: random-forest-tuning
+
+set.seed(456)
+doParallel::registerDoParallel()
+
+rf_tune <-
+  tune_grid(
+    rand_forest_wf,
+    resamples = train_folds
+  )
+
+```
+
+### Show metrics for estimates
+
+```{r}
+dt_tune |> 
+  collect_metrics()
+
+rf_tune |> 
+  collect_metrics()
+```
+
+select the best, for each models according to roc_auc
+
+```{r}
+dt_tune |> 
+  show_best("roc_auc")
+
+rf_tune |> 
+  show_best("roc_auc")
+```
+
+### Grid search tuning for RF model
+
+```{r}
+rf_tune_g
+```
