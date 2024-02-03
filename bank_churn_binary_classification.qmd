@@ -608,6 +608,8 @@ log_reg_fit <-
 Next, we test the fit on the validation set.
 
 ```{r}
+#| label: log-regression-prediction
+
 log_reg_validation_pred <- predict(log_reg_fit, validation_data, type = "class") |> 
   bind_cols(validation_data) |> 
   relocate(.pred_class, .after = exited)
@@ -615,12 +617,14 @@ log_reg_validation_pred <- predict(log_reg_fit, validation_data, type = "class")
 
 
 ```{r}
+#| label: log-regression-confusion-matrix
 conf_mat(log_reg_validation_pred, truth = exited, estimate = .pred_class)
 ```
 There are more false positive than false negative. The model predicts non-event better than event, but the accuracy is 83%
 ```{r}
 #| label: tbl-log-reg-accuracy
 #| tbl-cap: Logistic regression accuracy
+#| 
 accuracy(log_reg_validation_pred, truth = exited, estimate = .pred_class)
 ```
 
@@ -651,6 +655,7 @@ training_data_folds <- vfold_cv(training_data, v = 5, strata = exited)
 ## Decision Trees
 For the decision tree, we will set a grid a not too complex, and this is due to computational resources. After that we will tune or model, collect their metrics and evaluate their performance. Parallel computing will be employed to reduce training time time.
 
+### Fit Regular Grid
 ```{r}
 #| label: decision-tree-grid
 set.seed(345)
@@ -666,6 +671,7 @@ tree_grid |>
   count(tree_depth)
 ```
 
+### Tune Grid
 ```{r}
 #| label: decision-tune-tuning
 set.seed(234)
@@ -678,7 +684,10 @@ dt_tune <-
   )
 ```
 
+
 ```{r}
+#| label: decision-tune-metric
+
 dt_tune |> 
   collect_metrics() |> 
   head(n = 10)
@@ -696,7 +705,7 @@ dt_tune |>
   geom_line(linewidth = 1, alpha = 0.4) +
   labs( 
     x = "Cost Complexity",
-    y = "Mean",
+    y = "AUC",
     col = "Tree depth",
     title = "Model improves as tree depth increases",
     subtitle = str_wrap("Tree depth 15 performed well, but 11 is the best", width = 50)
@@ -705,6 +714,7 @@ dt_tune |>
   scale_x_log10(labels = label_number()) +
   scale_color_colorblind() +
   theme_clean() +
+  expand_limits(y = c(0.5, 0.9)) +
   theme(legend.position = "bottom")
   
 ```
@@ -712,6 +722,7 @@ dt_tune |>
 Our short tree with depth of 1 performed bad across all values of `cost_complexity`. The model improves as tree depth increases, but the best depth is 11 and not the maximum tree depth of 15 @fig-tree-grid-viz. The top 5 candidates models are show below.
 
 ```{r}
+#| label: decision-tress-best-parameter
 dt_tune |> 
   show_best("roc_auc")
 ```
@@ -719,6 +730,7 @@ dt_tune |>
 We will select the best of the hyperparameter values and use it to finalize our model
 
 ```{r}
+#| label: best-decision-tree-selection
 best_tree <- dt_tune |> 
   select_best("roc_auc")
 
@@ -728,7 +740,11 @@ best_tree
 Before we proceed with finalizing, we will fit a random forest tree and see how it performs compare it to the decision tree model, then finalize on which is the best.
 
 ## Random Forest
-The right values to use, when training a single model is unknown, but we can train a group and see which turns out best. Our training data is large, more than 132926 rows and 11 columns, a sample of this data should be collected, and be used to train the random forest model. Parallelization will also be used here to speed up to processing time. 
+The right values to use, when training a single model is unknown, but we can train a group and see which turns out best. 
+
+### Data Sharing for Random Forest
+Our training data is large, more than 132926 rows and 11 columns, a sample of this data should be collected, and be used to train the random forest model. Parallelization will also be used here to speed up to processing time. 
+
 ```{r}
 #| label: random-forest-resamples
 set.seed (222)
@@ -739,7 +755,7 @@ rand_for_resamples <- training(rand_for_resamples)
 rand_for_resamples <- vfold_cv(rand_for_resamples, v = 10)
 ```
 
-
+### Tuning Random Forest
 ```{r}
 #| label: random-forest-tuning
 set.seed(456)
@@ -754,6 +770,8 @@ rf_tune <-
 ```
 Let's see the result
 ```{r}
+#| label: pretuning-rand-forest
+
 rf_tune |> 
   collect_metrics() |> 
   filter(.metric == "roc_auc") |> 
@@ -764,22 +782,37 @@ rf_tune |>
     names_to = "parameter"
   ) |> 
   ggplot(aes(value, mean, col = parameter)) +
-  geom_point()
+  geom_point() +
+  labs(
+    x = "Value",
+    y = "AUC",
+    title = "Low mtry and high min_n are likely to make good model"
+  ) +
+  facet_wrap(~parameter, scales = "free") +
+  scale_color_colorblind() +
+  theme_clean()
 ```
 
-From the plot above, it seems low mtry (from 3 to 5) are good and high min_n (25 to 35) are good. We should a set range between this values using grid_regular for tuning one more time.
+### Tune Random Forest with Regular Grid
+
+From the plot above, it seems low mtry (from 2 to 5) are good and high min_n (25 to 35) are good. We should a set range between this values using grid_regular for tuning one more time.
 ```{r}
+#| label: regular-grid-search-rand-forest
+
 rf_grid <- 
   grid_regular(
     min_n(range = c(25, 35)),
-    mtry(range = c(3, 6)),
+    mtry(range = c(2, 6)),
     levels = 5
   )
 
 rf_grid
 ```
+Now we retune with the regular grid.
 
 ```{r}
+#| label: random-forest-model-grid-tuning
+
 set.seed(347)
 
 rand_forest_tune_reg <-
@@ -791,6 +824,7 @@ rand_forest_tune_reg <-
 ```
 
 ```{r}
+#| label: tune-performance-visualization
 rand_forest_tune_reg |> 
   collect_metrics() |> 
   filter(.metric == "roc_auc") |> 
@@ -798,30 +832,127 @@ rand_forest_tune_reg |>
   ggplot(aes(min_n, mean, col = mtry)) +
   geom_point() +
   geom_line() +
-  labs(y = "AUC")
+  labs(
+    y = "AUC", 
+    title = "Model performance reduces as mtry increases",
+    subtitle = "Model performance generally increases as min_n increases"
+  ) +
+  theme_clean()
 ```
-
-### Finalize Decison
-
-### Show metrics for estimates
+The best combination of parameters is when mtry is 2 and min_n is 30, but this can likely lead to underfitting (pretty low mtry of 2) as only two features are evaluated as candidates for each split.
 
 ```{r}
-rf_tune |> 
-  collect_metrics()
+#| label: tbl--roc-auc-min_n-mtry
+#| table: roc-auc-rand-forest
+rand_forest_tune_reg |> 
+  show_best("roc_auc", n = 10)
 ```
-
-select the best, for each models according to roc_auc
 
 ```{r}
-dt_tune |> 
-  show_best("roc_auc")
+#| label: select-best-rand-forest-param
 
-rf_tune |> 
-  show_best("roc_auc")
+best_forest <- 
+  rand_forest_tune_reg |> 
+  select_best("roc_auc")
 ```
 
-### Grid search tuning for RF model
+
+
+## Model Choice decision
+The best model seems to be the random forest model using the `roc_auc` to evaluate, but giving the tendency to for the random underfit, the decision tree will be selected.
+```{r}
+#| label: final-model
+final_tree <- finalize_model(
+  decision_tree_model,
+  best_tree
+)
+
+final_tree
+```
+We can check the variable importance, from our model. We will first prep and juice our recipe for decision tree.
 
 ```{r}
-rf_tune_g
+#| label: juice-prep-recipe
+dec_prep <- prep(decision_tree_rec)
+
+dec_tree <- juice(dec_prep)
 ```
+
+
+### Feature Importance
+```{r}
+#| label: fig-feature-importance
+#| message: false
+#| fig-cap: Variable of importance
+library(vip)
+
+tree_fit <- final_tree |> 
+  set_engine("rpart") |> 
+  fit(exited ~ ., data = dec_tree)
+
+vip(tree_fit, aes = list(fill = "mediumaquamarine")) +
+  labs(
+    x = "importance",
+    y = "Features",
+    title = "Feature importance"
+  ) +
+  theme_clean()
+```
+Age, num_of_products, balance, and is_active_member are the most important features in the model @fig-feature-importance.
+
+The model is finalized, we need to finalize the workflow, then make the last fit
+
+### Finalizing Models
+```{r}
+#| label: finalize-workflow-and-last-fit
+
+tree_final_wf <- workflow() |> 
+  add_recipe(decision_tree_rec) |> 
+  add_model(final_tree)
+
+tree_final_fit <- 
+  last_fit(
+    tree_final_wf,
+    train_data_split
+  )
+```
+
+
+```{r}
+#| label: final-fit-metric
+tree_final_fit |> 
+  collect_metrics("roc_auc")
+```
+
+The metrics is good and we did not overfit during tuning.
+
+```{r}
+#| label: model-predicitions
+#| message = false
+
+tree_final_fit |> 
+  collect_predictions() |> 
+  mutate(prediction_status = case_when(
+    exited == .pred_class ~ "Correct",
+    .default = "Incorrect"
+  )) |> 
+  bind_cols(validation_data) |> 
+  clean_names() |>
+  filter(exited_19 == 1) |> 
+  ggplot(aes(estimated_salary, credit_score, color = prediction_status)) +
+  geom_point() + 
+  scale_color_tableau() +
+  facet_wrap(~geography) +
+  labs(
+    x = "Estimated Salary",
+    y = "Credit Score",
+    col = "Prediction",
+    title = "Prediction of Exited members",
+    subtitle = "Model have lots of incorrect predicitions in France"
+  ) +
+  scale_x_continuous(labels = label_currency(prefix = "€")) +
+  theme_pander() +
+  theme(axis.text.x = element_text(angle = 320))
+```
+
+# 
