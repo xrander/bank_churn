@@ -72,32 +72,18 @@ The bank customer churn dataset is a commonly used dataset for predicting custom
 ### Import the data
 
 ```{r}
-#| label: pkg-import-data
+#| label: import-data
 #| message: false
 
 train_data <- read_csv("data/train.csv") |> 
   clean_names() |> 
   mutate(exited = factor(exited))
 
-test_data <- read_csv("data/test.csv") |> 
-  clean_names()
-
 dim(train_data)
-dim(test_data)
+
 ```
 
-The `train_data` is having 165034 rows and 14 columns while the `test_data` is having 110023 rows and 13 columns
-
-```{r}
-#| label: tbl-data-frame-comparison
-#| tbl-cap: |
-#|  Comparison between the variable types between the train and test data
-
-compare_df_cols(train_data, test_data) |> 
-  gt()
-```
-
-@tbl-data-frame-comparison shows only the target variable missing in the test data
+The `train_data` is having 165034 rows and 14 columns.
 
 # Exploratory Data Analysis
 
@@ -955,4 +941,59 @@ tree_final_fit |>
   theme(axis.text.x = element_text(angle = 320))
 ```
 
-# 
+# Prediction on New Data
+First, we need to extract our model
+```{r}
+#| label: extract-model
+decision_tree_final_model <- tree_final_fit |> 
+  extract_fit_parsnip()
+```
+
+
+We import the new data newly
+
+```{r}
+#| label: import-test-data
+#| message: false
+test_data <- read_csv("data/test.csv") |> 
+  clean_names()
+
+head(test_data)
+```
+
+
+```{r}
+#| label: tbl-data-frame-comparison
+#| tbl-cap: |
+#|  Comparison between the variable types between the train and test data
+
+compare_df_cols(train_data, test_data) |> 
+  gt()
+```
+
+@tbl-data-frame-comparison shows only the target variable missing in the test data
+
+## Prediction
+```{r}
+#| label: new-data-prediciton
+
+exited <- predict(decision_tree_final_model, new_data = test_data)
+```
+
+
+```{r}
+exited_customers <- exited |> 
+  bind_cols(test_data) |>
+  rename("exited" = .pred_class) |> 
+  relocate(exited, .after = id) |> 
+  select(id, exited)
+```
+
+```{r}
+write_csv(exited_customers, "olamide_submission.csv")
+```
+
+```{r}
+read_csv("olamide_submission.csv")
+```
+
